@@ -5,13 +5,10 @@ Scans auth.log for failed login attempts, brute-force patterns, and suspicious I
 """
 
 import argparse
-import datetime
 import json
 import os
 import re
-import sys
 from collections import Counter, defaultdict
-from pathlib import Path
 
 # Maximum log file size (CWE-770)
 MAX_LOG_SIZE = 500 * 1024 * 1024  # 500MB
