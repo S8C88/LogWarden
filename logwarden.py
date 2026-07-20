@@ -13,6 +13,25 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+# Maximum log file size (CWE-770)
+MAX_LOG_SIZE = 500 * 1024 * 1024  # 500MB
+
+
+def _validate_path(path: str, purpose: str = "input") -> str:
+    """Validate a file path — canonicalize and check exists (CWE-20/CWE-22)."""
+    resolved = os.path.realpath(path)
+    if purpose == "input":
+        if not os.path.isfile(resolved):
+            raise FileNotFoundError(f"Log file not found: {resolved}")
+        file_size = os.path.getsize(resolved)
+        if file_size > MAX_LOG_SIZE:
+            raise ValueError(f"Log file too large ({file_size} bytes > {MAX_LOG_SIZE} max)")
+    elif purpose == "output":
+        parent = os.path.dirname(resolved)
+        if parent and not os.path.isdir(parent):
+            raise FileNotFoundError(f"Output directory does not exist: {parent}")
+    return resolved
+
 
 SSH_FAILED_RE = re.compile(
     r"(Failed password|Connection closed by authenticating user|"
@@ -41,15 +60,19 @@ def parse_log(logpath: str) -> dict:
     }
     
     if not os.path.exists(logpath):
-        print(f"[-] File not found: {logpath}")
+        print("[-] Log file not found")
         return data
-    
-    with open(logpath, "r", errors="replace") as f:
+
+    # CWE-20/CWE-22: Validate path
+    validated = _validate_path(logpath)
+
+    with open(validated, "r", errors="replace") as f:
         for line in f:
             data["total_lines"] += 1
             
             # Timestamp extraction
             ts_match = re.match(r"^(\w{3}\s+\d+\s+\d+:\d+:\d+)", line)
+            # CWE-476: guard regex match before .group()
             timestamp = ts_match.group(1) if ts_match else "unknown"
             
             if SSH_FAILED_RE.search(line):
@@ -57,6 +80,7 @@ def parse_log(logpath: str) -> dict:
                 data["timeline"].append((timestamp, "FAILED", line.strip()[:120]))
                 
                 # Extract username + source IP
+                # CWE-476: guard regex match before .group()
                 m = SSH_INVALID_USER_RE.search(line)
                 if m:
                     data["invalid_users"] += 1
@@ -70,6 +94,7 @@ def parse_log(logpath: str) -> dict:
                         "type": "invalid_user",
                     })
                 
+                # CWE-476: guard regex match before .group()
                 m = SSH_FAILED_PW_RE.search(line)
                 if m:
                     user, ip = m.group(1), m.group(2)
@@ -82,6 +107,7 @@ def parse_log(logpath: str) -> dict:
                         "type": "failed_password",
                     })
             
+            # CWE-476: guard regex match before .group()
             m = SSH_ACCEPTED_RE.search(line)
             if m:
                 data["accepted_logins"] += 1
@@ -145,11 +171,13 @@ def main():
     print_report(data)
 
     if args.output:
+        # CWE-20/CWE-22: Validate output path
+        out_path = _validate_path(args.output, "output")
         # Convert sets to lists for JSON
         data_serializable = data
         if isinstance(data_serializable.get("unique_ips"), set):
             data_serializable["unique_ips"] = list(data_serializable["unique_ips"])
-        with open(args.output, "w") as f:
+        with open(out_path, "w") as f:
             json.dump(data_serializable, f, indent=2, default=str)
         print(f"[+] Report saved to {args.output}")
 
